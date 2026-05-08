@@ -1,35 +1,42 @@
 import { fetchJson } from '../lib/fetchJson'
 
-type IssNowResponse = {
-  message: string
+type WhereTheIssResponse = {
+  name?: string
+  id?: number
+  latitude: number
+  longitude: number
+  velocity?: number
   timestamp: number
-  iss_position: { latitude: string; longitude: string }
 }
 
-type AstrosResponse = {
-  message: string
-  number: number
-  people?: { name: string; craft: string }[]
+type SpaceDevsAstronauts = {
+  count?: number
+  results?: Array<{
+    name?: string
+    status?: { name?: string }
+    nationality?: string
+  }>
 }
-
-const OPEN_NOTIFY_BASE = 'http://api.open-notify.org'
 
 export async function fetchIssNow() {
-  const data = await fetchJson<IssNowResponse>(`${OPEN_NOTIFY_BASE}/iss-now.json`)
-  const latitude = Number.parseFloat(data.iss_position.latitude)
-  const longitude = Number.parseFloat(data.iss_position.longitude)
+  // HTTPS endpoint (works on Vercel) and includes timestamp.
+  const data = await fetchJson<WhereTheIssResponse>(
+    'https://api.wheretheiss.at/v1/satellites/25544?units=kilometers',
+  )
   return {
-    latitude,
-    longitude,
+    latitude: data.latitude,
+    longitude: data.longitude,
     timestampMs: data.timestamp * 1000,
   }
 }
 
 export async function fetchPeopleInSpace() {
-  const data = await fetchJson<AstrosResponse>(`${OPEN_NOTIFY_BASE}/astros.json`)
-  const names = (data.people ?? []).map((p) => p.name).filter(Boolean)
+  // Keyless HTTPS endpoint. Returns astronauts currently in space.
+  const url = 'https://ll.thespacedevs.com/2.2.0/astronaut/?in_space=true&limit=100'
+  const data = await fetchJson<SpaceDevsAstronauts>(url)
+  const names = (data.results ?? []).map((p) => p.name).filter(Boolean) as string[]
   return {
-    count: data.number,
+    count: data.count ?? names.length,
     names,
     updatedAtMs: Date.now(),
   }
