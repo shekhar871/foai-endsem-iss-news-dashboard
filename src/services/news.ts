@@ -2,15 +2,27 @@ import { fetchJson } from '../lib/fetchJson'
 import { readJsonWithTtl, writeJsonWithTtl } from '../lib/storage'
 import type { NewsArticle, NewsCategory } from '../types/dashboard'
 
-type GdeltDocResponse = {
-  articles?: Array<{
-    url?: string
+type SpaceflightResponse = {
+  results?: Array<{
+    id: number
     title?: string
-    seendate?: string
-    sourceCountry?: string
-    domain?: string
-    language?: string
-    socialimage?: string
+    url?: string
+    image_url?: string
+    news_site?: string
+    summary?: string
+    published_at?: string
+    authors?: Array<{ name?: string }>
+  }>
+}
+
+type HnAlgoliaResponse = {
+  hits?: Array<{
+    objectID: string
+    title?: string | null
+    url?: string | null
+    author?: string | null
+    created_at?: string | null
+    story_text?: string | null
   }>
 }
 
@@ -42,41 +54,46 @@ function requireNewsApiKey() {
 }
 
 async function fetchFromGdelt(category: NewsCategory): Promise<NewsArticle[]> {
-  const query = category === 'science' ? 'science OR space OR nasa' : 'technology OR AI OR software'
-  const url = new URL('https://api.gdeltproject.org/api/v2/doc/doc')
-  url.searchParams.set('query', query)
-  url.searchParams.set('mode', 'ArtList')
-  url.searchParams.set('format', 'json')
-  url.searchParams.set('maxrecords', '5')
-  url.searchParams.set('sort', 'HybridRel')
-  url.searchParams.set('format', 'json')
+  // Keyless fallback sources that work in browsers:
+  // - science: Spaceflight News API
+  // - technology: Hacker News Algolia
+  if (category === 'science') {
+    const url = new URL('https://api.spaceflightnewsapi.net/v4/articles/')
+    url.searchParams.set('limit', '5')
+    const data = await fetchJson<SpaceflightResponse>(url.toString())
+    return (
+      data.results?.slice(0, 5).map((a, idx) => {
+        const title = a.title ?? 'Untitled'
+        const urlValue = a.url ?? ''
+        const publishedAt = a.published_at ?? new Date().toISOString()
+        const source = a.news_site ?? 'Spaceflight News'
+        const author = a.authors?.map((x) => x.name).filter(Boolean).join(', ') || null
+        const description = a.summary ?? null
+        const imageUrl = a.image_url ?? null
+        const id = `${category}-spaceflight-${a.id ?? idx}-${publishedAt}`.replace(/\s+/g, '-')
+        return { id, category, title, source, author, publishedAt, url: urlValue, imageUrl, description } satisfies NewsArticle
+      }) ?? []
+    )
+  }
 
-  const data = await fetchJson<GdeltDocResponse>(url.toString())
-  const mapped =
-    data.articles?.slice(0, 5).map((a, idx) => {
-      const title = a.title ?? 'Untitled'
-      const urlValue = a.url ?? ''
-      const publishedAt = a.seendate ? new Date(a.seendate).toISOString() : new Date().toISOString()
-      const source = a.domain ?? a.sourceCountry ?? 'GDELT'
-      const author = null
-      const description = null
-      const imageUrl = a.socialimage ?? null
-      const id = `${category}-gdelt-${idx}-${publishedAt}-${title}`.replace(/\s+/g, '-')
-
-      return {
-        id,
-        category,
-        title,
-        source,
-        author,
-        publishedAt,
-        url: urlValue,
-        imageUrl,
-        description,
-      } satisfies NewsArticle
+  const hnUrl = new URL('https://hn.algolia.com/api/v1/search_by_date')
+  hnUrl.searchParams.set('query', 'technology')
+  hnUrl.searchParams.set('tags', 'story')
+  hnUrl.searchParams.set('hitsPerPage', '5')
+  const hn = await fetchJson<HnAlgoliaResponse>(hnUrl.toString())
+  return (
+    hn.hits?.slice(0, 5).map((h) => {
+      const title = h.title ?? 'Untitled'
+      const urlValue = h.url ?? `https://news.ycombinator.com/item?id=${h.objectID}`
+      const publishedAt = h.created_at ?? new Date().toISOString()
+      const source = 'Hacker News'
+      const author = h.author ?? null
+      const description = h.story_text ?? null
+      const imageUrl = null
+      const id = `${category}-hn-${h.objectID}`.replace(/\s+/g, '-')
+      return { id, category, title, source, author, publishedAt, url: urlValue, imageUrl, description } satisfies NewsArticle
     }) ?? []
-
-  return mapped
+  )
 }
 
 export async function fetchTopHeadlines(category: NewsCategory, force = false): Promise<NewsArticle[]> {
@@ -124,7 +141,7 @@ export async function fetchTopHeadlines(category: NewsCategory, force = false): 
           } satisfies NewsArticle
         }) ?? []
     } catch {
-      // If NewsAPI key is missing/invalid or request fails, auto-fallback to a keyless source (GDELT).
+      // If NewsAPI key is missing/invalid or request fails, auto-fallback to keyless sources.
       mapped = await fetchFromGdelt(category)
     }
   } else {
